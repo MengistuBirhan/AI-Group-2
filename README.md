@@ -1,16 +1,20 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import r2_score  # Import the R-squared metric
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pickle
+import os
+import altair as alt
 
 
-# Grade Mapping Functions
-
+#  Grade Mapping Functions
+ 
 def map_grade_to_numeric_letter(score):
     if score < 40:
         return 0.0, 'F'
@@ -59,9 +63,9 @@ def convert_numeric_to_letter(grade):
     else:
         return "A+"
 
--
-# Load and Preprocess Data
-
+ 
+#  Load and Preprocess Data
+ 
 data = pd.read_csv('Students _Performance _Prediction.csv')
 
 categorical_columns = data.select_dtypes(include=['object']).columns
@@ -73,33 +77,95 @@ for col in categorical_columns:
     label_encoders[col] = le
 
 data[['Numeric_Grade', 'Letter_Grade']] = data['Grade'].apply(lambda x: pd.Series(map_grade_to_numeric_letter(x))
-)feature_columns = ['Student_Age', 'Sex', 'High_School_Type', 'Scholarship', 'Additional_Work', 'Sports_activity', 'Transportation', 'Weekly_Study_Hours', 'Attendance', 'Reading','Notes', 'Listening_in_Class', 'Project_work']
+)feature_columns = ['Student_Age', 'Sex', 'High_School_Type', 'Scholarship','Additional_Work', 'Sports_activity', 'Transportation','Weekly_Study_Hours', 'Attendance', 'Reading', 'Notes', 'Listening_in_Class', 'Project_work']
 
 X = data[feature_columns]
 y = data['Numeric_Grade']
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=34)
-model = RandomForestRegressor(random_state=34)
-model.fit(X_train, y_train)
 
+ 
+#  Model Selection and Loading/Saving
+ 
+MODEL_FILE_PATH = "student_performance_model.pkl"
+LABEL_ENCODER_FILE_PATH = "label_encoders.pkl"
 
-# Feature Importance
+st.sidebar.header("⚙️ Model Selection")
+model_type = st.sidebar.selectbox("Select a Regression Model", ["Random Forest", "Gradient Boosting", "Linear Regression"])
 
-feature_importances = model.feature_importances_
-feature_importance_df = pd.DataFrame({'Feature': X.columns, 'Importance': feature_importances})
-feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
+# Function to load the model and label encoders
 
+def load_model_and_encoders():
+    if os.path.exists(MODEL_FILE_PATH) and os.path.exists(LABEL_ENCODER_FILE_PATH):
+        with open(MODEL_FILE_PATH, 'rb') as file:
+            loaded_model = pickle.load(file)
+        with open(LABEL_ENCODER_FILE_PATH, 'rb') as file:
+            loaded_encoders = pickle.load(file)
+        return loaded_model, loaded_encoders
+    return None, None
 
+# Function to save the model and label encoders
+
+def save_model_and_encoders(trained_model, encoders):
+    with open(MODEL_FILE_PATH, 'wb') as file:
+        pickle.dump(trained_model, file)
+    with open(LABEL_ENCODER_FILE_PATH, 'wb') as file:
+        pickle.dump(encoders, file)
+
+loaded_model, loaded_label_encoders = load_model_and_encoders()
+
+if loaded_model:
+    model = loaded_model
+    label_encoders = loaded_label_encoders
+    st.sidebar.success("Loaded pre-trained model and encoders!")
+else:
+    if model_type == "Random Forest":
+        model = RandomForestRegressor(random_state=34)
+    elif model_type == "Gradient Boosting":
+        model = GradientBoostingRegressor(random_state=34)
+    elif model_type == "Linear Regression":
+        model = LinearRegression()
+
+    model.fit(X_train, y_train)
+    save_model_and_encoders(model, label_encoders)
+    st.sidebar.info("Trained and saved the model and encoders.")
+
+ 
+# Feature Importance (Conditional on Tree-Based Models)
+ 
+if isinstance(model, (RandomForestRegressor, GradientBoostingRegressor)):
+    feature_importances = model.feature_importances_
+    feature_importance_df = pd.DataFrame({'Feature': X.columns, 'Importance': feature_importances})
+    feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
+
+ 
 #  Model Evaluation
-
+ 
 y_pred_test = model.predict(X_test)
 r_squared = r2_score(y_test, y_pred_test)
 
+ 
+#  Advanced Data Exploration
+ 
+st.sidebar.header("Advanced Data Exploration")
 
+if st.sidebar.checkbox("Show Scatter Plot"):
+    st.subheader("Interactive Scatter Plot")
+    x_feature = st.selectbox("Select X-axis Feature", feature_columns)
+    y_feature = st.selectbox("Select Y-axis Feature", feature_columns + ['Numeric_Grade'])
+    if x_feature and y_feature:
+        chart = alt.Chart(data).mark_circle().encode( x=x_feature,y=y_feature,tooltip=[x_feature, y_feature, 'Letter_Grade', 'Student_Age']
+        ).interactive()
+        st.altair_chart(chart, use_container_width=True)
+
+ 
 #  Streamlit UI
-
-st.title(" Student Performance Predictor")
-st.markdown("Predict the final grade based on student information")
+ 
+st.title("Student Performance Predictor")
+if loaded_model:
+    st.markdown(f"Predicting final grade using **{type(model).__name__}** (loaded)")
+else:
+    st.markdown(f"Predicting final grade using **{model_type}**")
 
 with st.form("prediction_form"):
     col1, col2 = st.columns(2)
@@ -136,16 +202,17 @@ if submit:
         'Attendance': attendance,
         'Reading': reading,
         'Notes': notes,
-        'Listening_in_Class': listening_in_class,
+        'Listening_in_class': listening_in_class,
         'Project_work': project_work
     }
 
     input_df = pd.DataFrame([input_data])
 
-  # Encode input
+    # Encode input using loaded or newly fitted encoders
+    encoders_to_use = loaded_label_encoders if loaded_label_encoders else label_encoders
     for col in input_df.columns:
-        if col in label_encoders:
-            encoder = label_encoders[col]
+        if col in encoders_to_use:
+            encoder = encoders_to_use[col]
             try:
                 input_df[col] = encoder.transform(input_df[col])
             except ValueError:
@@ -156,24 +223,54 @@ if submit:
 
     input_df = input_df[X.columns]
 
-  # Predict
+# Predict
+
     pred_numeric = model.predict(input_df)[0]
     pred_letter = convert_numeric_to_letter(pred_numeric)
 
+    st.subheader("Prediction Result")
     st.success(f" Predicted Grade: **{pred_numeric:.2f} ➝ {pred_letter}**")
 
- # Display Feature Importance
+ # Display Feature Importance (Conditional)
  
-    st.subheader("Feature Importance")
-    st.markdown("Relative importance of each factor in the prediction.")
-    fig, ax = plt.subplots()
-    sns.barplot(x='Importance', y='Feature', data=feature_importance_df, ax=ax)
-    plt.title('Feature Importance')
-    plt.xlabel('Importance Score')
-    plt.ylabel('Feature')
-    st.pyplot(fig)
+    if isinstance(model, (RandomForestRegressor, GradientBoostingRegressor)):
+        st.subheader("Feature Importance")
+        st.markdown("Relative importance of each factor in the prediction.")
+        fig_importance, ax_importance = plt.subplots()
+        sns.barplot(x='Importance', y='Feature', data=feature_importance_df, ax=ax_importance)
+        plt.title('Feature Importance')
+        plt.xlabel('Importance Score')
+        plt.ylabel('Feature')
+        st.pyplot(fig_importance)
 
-# Display Model Evaluation
+#  Display Model Evaluation
+
 st.subheader("Model Evaluation")
 st.markdown("Performance of the model on unseen data.")
 st.metric("R-squared Score", f"{r_squared:.3f}")
+
+# Data Exploration
+
+st.sidebar.header("Data Exploration")
+if st.sidebar.checkbox("Show Raw Data"):
+    st.subheader("Raw Data")
+    st.dataframe(data)
+
+if st.sidebar.checkbox("Show Data Statistics"):
+    st.subheader("Data Statistics")
+    st.dataframe(data.describe())
+
+st.sidebar.subheader("Visualizations")
+feature_to_plot = st.sidebar.selectbox("Select a Feature for Histogram", feature_columns + ['Numeric_Grade'])
+  if st.sidebar.checkbox(f"Show Histogram of {feature_to_plot}"):
+      st.subheader(f"Histogram of {feature_to_plot}")
+      fig_hist, ax_hist = plt.subplots()
+      sns.histplot(data[feature_to_plot], bins=20, kde=True, ax=ax_hist)
+       st.pyplot(fig_hist)
+
+categorical_feature_to_plot = st.sidebar.selectbox("Select a Categorical Feature for Count Plot", categorical_columns)
+      if st.sidebar.checkbox(f"Show Count Plot of {categorical_feature_to_plot}"):
+          st.subheader(f"Count Plot of {categorical_feature_to_plot}")
+          fig_count, ax_count = plt.subplots()
+          sns.countplot(data=data, y=categorical_feature_to_plot, ax=ax_count)
+          st.pyplot(fig_count)
